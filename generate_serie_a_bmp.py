@@ -118,17 +118,24 @@ def preferred_team_name(name: str) -> str:
 
 def fetch_espn_round(round_fixtures: list[dict[str, Any]], season_year: int) -> dict[tuple[str, str], dict[str, Any]]:
     round_dates = [parse_feed_datetime(item["DateUtc"]) for item in round_fixtures]
-    date_from = (min(round_dates) - timedelta(days=1)).strftime("%Y%m%d")
-    date_to = (max(round_dates) + timedelta(days=1)).strftime("%Y%m%d")
-    query = urllib.parse.urlencode({"dates": f"{date_from}-{date_to}", "limit": 100})
-    payload = http_get_json(f"{ESPN_SCOREBOARD}?{query}")
-
-    leagues = payload.get("leagues", [])
-    if not leagues or "Serie A" not in leagues[0].get("name", ""):
-        raise RuntimeError("ESPN response was not identified as Italian Serie A")
+    date_from = (min(round_dates) - timedelta(days=1)).date()
+    date_to = (max(round_dates) + timedelta(days=1)).date()
+    # ESPN's soccer scoreboard rejects date ranges with HTTP 400. Fetch each
+    # UTC day separately, keeping the buffer for rescheduled kickoff times.
+    events: dict[str, dict[str, Any]] = {}
+    day = date_from
+    while day <= date_to:
+        query = urllib.parse.urlencode({"dates": day.strftime("%Y%m%d"), "limit": 100})
+        payload = http_get_json(f"{ESPN_SCOREBOARD}?{query}")
+        leagues = payload.get("leagues", [])
+        if not leagues or "Serie A" not in leagues[0].get("name", ""):
+            raise RuntimeError("ESPN response was not identified as Italian Serie A")
+        for event in payload.get("events", []):
+            events[event["id"]] = event
+        day += timedelta(days=1)
 
     result: dict[tuple[str, str], dict[str, Any]] = {}
-    for event in payload.get("events", []):
+    for event in events.values():
         if int(event.get("season", {}).get("year", -1)) != season_year:
             continue
         competition = event.get("competitions", [{}])[0]
